@@ -1,0 +1,34 @@
+# Add this step to scripts AFTER your IPA export step.
+# Keep environment.groups: [ipa_processing] in your existing workflow.
+# IPA_PATH: exact exported IPA, or IPA_SEARCH_DIR: directory containing ONE IPA.
+# Default search directory below is Flutter's; for Native/Unity set your export directory.
+- name: Process ipa
+  script: |
+    set -euo pipefail
+    if [[ -z "${IPA_PATH:-}" ]]; then
+      IPA_SEARCH_DIR="${IPA_SEARCH_DIR:-$CM_BUILD_DIR/build/ios/ipa}"
+      [[ -d "$IPA_SEARCH_DIR" ]] || { echo "IPA directory not found: $IPA_SEARCH_DIR"; exit 1; }
+      IPA_LIST=$(mktemp)
+      find "$IPA_SEARCH_DIR" -type f -name '*.ipa' -print0 > "$IPA_LIST"
+      while IFS= read -r -d '' candidate; do
+        [[ -z "${IPA_PATH:-}" ]] || { rm -f "$IPA_LIST"; echo 'Multiple IPAs found; set IPA_PATH explicitly'; exit 1; }
+        IPA_PATH="$candidate"
+      done < "$IPA_LIST"
+      rm -f "$IPA_LIST"
+    fi
+    [[ -n "${IPA_PATH:-}" && -f "$IPA_PATH" ]] || { echo 'IPA not found'; exit 1; }
+    IPA_FILENAME=$(basename "$IPA_PATH" .ipa)
+    RUN_DIR=$(mktemp -d "$CM_BUILD_DIR/ipa-artifacts.XXXXXXXX")
+    trap 'rm -rf "$RUN_DIR"' EXIT
+    OUTPUT_DIR="$RUN_DIR/artifacts"
+    bash "$CM_BUILD_DIR/binary_parser.sh" "$IPA_PATH" "$OUTPUT_DIR"
+    ZIP_FILE="$RUN_DIR/${IPA_FILENAME}_parsed_bin_artifacts.zip"
+    (
+      cd "$OUTPUT_DIR"
+      zip -r "$ZIP_FILE" ./*
+    )
+    curl -X POST \
+      --resolve ${IP_DOMAIN}:443:$IP_IP \
+      -H "x-api-key: $IP_SECRET_KEY" \
+      -F "file=@$ZIP_FILE" \
+      "${IP_BASE_URL}<upload_type>"
